@@ -1,0 +1,7 @@
+streamlit
+pandas
+numpy
+sentence-transformers
+rank-bm25
+pypdf
+python-docx
