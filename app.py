@@ -1,5 +1,4 @@
 from io import BytesIO
-from pathlib import Path
 import re
 
 import pandas as pd
@@ -16,11 +15,12 @@ st.set_page_config(
 
 st.title("Explainable Candidate–Job Matching")
 st.caption(
-    "Research prototype. Upload a job description and one or more CVs "
-    "to inspect their matches. Do not use these scores as hiring decisions."
+    "Research prototype: upload a job description and one or more CVs. "
+    "Results are for demonstration, not hiring decisions."
 )
 
-# Edit this list to match the skills used in your research dataset.
+
+# Skill names and alternative terms recognized by this prototype.
 SKILLS = {
     "python": ["python"],
     "java": ["java"],
@@ -61,7 +61,11 @@ SKILLS = {
     "stakeholder management": ["stakeholder management"],
     "communication": ["communication skills", "written communication"],
     "digital marketing": ["digital marketing"],
-    "seo": ["seo", "search engine optimization", "search engine optimisation"],
+    "seo": [
+        "seo",
+        "search engine optimization",
+        "search engine optimisation",
+    ],
     "google analytics": ["google analytics"],
     "social media": ["social media"],
     "content marketing": ["content marketing"],
@@ -69,7 +73,7 @@ SKILLS = {
 
 
 def read_file(uploaded_file):
-    """Extract text from a TXT, PDF, or DOCX upload."""
+    """Extract text from a TXT, PDF, or DOCX file."""
     name = uploaded_file.name.lower()
     content = uploaded_file.getvalue()
 
@@ -78,13 +82,19 @@ def read_file(uploaded_file):
 
     if name.endswith(".pdf"):
         reader = PdfReader(BytesIO(content))
-        return "\n".join(page.extract_text() or "" for page in reader.pages)
+        return "\n".join(
+            page.extract_text() or ""
+            for page in reader.pages
+        )
 
     if name.endswith(".docx"):
         document = Document(BytesIO(content))
-        return "\n".join(p.text for p in document.paragraphs)
+        return "\n".join(
+            paragraph.text
+            for paragraph in document.paragraphs
+        )
 
-    raise ValueError("Please upload a TXT, PDF, or DOCX file.")
+    raise ValueError("Unsupported file type. Use TXT, PDF, or DOCX.")
 
 
 def clean_text(text):
@@ -92,34 +102,47 @@ def clean_text(text):
 
 
 def contains_phrase(text, phrase):
-    """Match a skill as a complete phrase, ignoring case."""
     pattern = r"(?<!\w)" + re.escape(phrase) + r"(?!\w)"
-    return re.search(pattern, text, flags=re.IGNORECASE) is not None
+    return re.search(
+        pattern,
+        text,
+        flags=re.IGNORECASE,
+    ) is not None
 
 
 def extract_skills(text):
     found = set()
+
     for skill, aliases in SKILLS.items():
-        if any(contains_phrase(text, alias) for alias in aliases):
+        if any(
+            contains_phrase(text, alias)
+            for alias in aliases
+        ):
             found.add(skill)
+
     return found
 
 
 @st.cache_resource(show_spinner="Loading Sentence-BERT model...")
 def load_model():
-    return SentenceTransformer("sentence-transformers/all-MiniLM-L6-v2")
+    return SentenceTransformer(
+        "sentence-transformers/all-MiniLM-L6-v2"
+    )
 
+
+# -------------------- INPUTS --------------------
 
 st.subheader("1. Job description")
 
 jd_file = st.file_uploader(
-    "Upload the job description",
+    "Upload a job description",
     type=["txt", "pdf", "docx"],
     key="job_description",
 )
+
 jd_typed = st.text_area(
     "Or paste the job description here",
-    height=180,
+    height=170,
     placeholder="Paste the job title, responsibilities, and required skills...",
 )
 
@@ -132,190 +155,303 @@ cv_files = st.file_uploader(
     key="candidate_cvs",
 )
 
+st.subheader("3. Scoring weights")
+
+semantic_weight_percent = st.slider(
+    "Sentence-BERT semantic weight (%)",
+    min_value=0,
+    max_value=100,
+    value=60,
+    step=5,
+    help="The remaining percentage is assigned to skill matching.",
+)
+
+skill_weight_percent = 100 - semantic_weight_percent
+
+st.write(
+    f"**Current ratio:** {semantic_weight_percent}% Sentence-BERT "
+    f"+ {skill_weight_percent}% skill matching"
+)
+
+
+# -------------------- MATCHING --------------------
+
 if st.button("Match candidates", type="primary"):
     try:
-        job_text = clean_text(
-            jd_typed if jd_typed.strip() else read_file(jd_file)
-        ) if (jd_typed.strip() or jd_file is not None) else ""
+        if jd_typed.strip():
+            job_text = clean_text(jd_typed)
+        elif jd_file is not None:
+            job_text = clean_text(read_file(jd_file))
+        else:
+            job_text = ""
 
         if not job_text:
-            st.error("Enter or upload a job description.")
+            st.error("Please paste or upload a job description.")
             st.stop()
 
         if not cv_files:
-            st.error("Upload at least one CV.")
+            st.error("Please upload at least one CV.")
             st.stop()
 
         candidates = []
+
         for cv_file in cv_files:
             cv_text = clean_text(read_file(cv_file))
+
             if not cv_text:
                 st.warning(
                     f"No readable text was found in {cv_file.name}. "
-                    "Scanned PDFs may need OCR."
+                    "A scanned PDF may require OCR."
                 )
                 continue
 
             candidates.append(
-                {"filename": cv_file.name, "text": cv_text}
+                {
+                    "filename": cv_file.name,
+                    "text": cv_text,
+                }
             )
 
         if not candidates:
-            st.error("None of the uploaded CVs contained readable text.")
+            st.error(
+                "No readable text was found in the uploaded CVs."
+            )
             st.stop()
 
         model = load_model()
+
         job_embedding = model.encode(
             job_text,
             normalize_embeddings=True,
         )
+
         cv_embeddings = model.encode(
             [candidate["text"] for candidate in candidates],
             normalize_embeddings=True,
         )
 
         job_skills = extract_skills(job_text)
+        semantic_weight = semantic_weight_percent / 100
+        skill_weight = skill_weight_percent / 100
+
         results = []
 
-        for candidate, cv_embedding in zip(candidates, cv_embeddings):
+        for candidate, cv_embedding in zip(
+            candidates,
+            cv_embeddings,
+        ):
             cv_skills = extract_skills(candidate["text"])
-            matched = sorted(job_skills & cv_skills)
-            missing = sorted(job_skills - cv_skills)
 
-            # Normalized embeddings make their dot product cosine similarity.
-            cosine = float(job_embedding @ cv_embedding)
-
-            # Keep the displayed semantic component between 0 and 1.
-            semantic_score = max(0.0, min(1.0, cosine))
-
-            # If the job description contains no recognized skills,
-            # do not invent a skill match.
-            skill_score = (
-                len(matched) / len(job_skills)
-                if job_skills
-                else None
+            matched_skills = sorted(
+                job_skills & cv_skills
+            )
+            missing_skills = sorted(
+                job_skills - cv_skills
             )
 
-            if skill_score is None:
-                combined_score = semantic_score
-            else:
-                combined_score = (
-                    0.60 * semantic_score + 0.40 * skill_score
+            # Dot product of normalized embeddings is cosine similarity.
+            cosine_similarity = float(
+                job_embedding @ cv_embedding
+            )
+
+            # Bound the displayed score to the range 0–1.
+            semantic_score = max(
+                0.0,
+                min(1.0, cosine_similarity),
+            )
+
+            if job_skills:
+                skill_score = (
+                    len(matched_skills) / len(job_skills)
                 )
+
+                combined_score = (
+                    semantic_weight * semantic_score
+                    + skill_weight * skill_score
+                )
+            else:
+                skill_score = None
+                combined_score = semantic_score
 
             results.append(
                 {
-                    "CV": candidate["filename"],
-                    "Match score": round(100 * combined_score, 1),
-                    "Semantic score": round(100 * semantic_score, 1),
-                    "Skill score": (
-                        round(100 * skill_score, 1)
-                        if skill_score is not None
-                        else None
-                    ),
-                    "Matched skills": matched,
-                    "Missing skills": missing,
+                    "cv": candidate["filename"],
+                    "combined_score": combined_score,
+                    "semantic_score": semantic_score,
+                    "skill_score": skill_score,
+                    "matched_skills": matched_skills,
+                    "missing_skills": missing_skills,
                 }
             )
 
         results.sort(
-            key=lambda item: (-item["Match score"], item["CV"].lower())
+            key=lambda result: (
+                -result["combined_score"],
+                result["cv"].lower(),
+            )
         )
 
-        st.subheader("3. Results")
+        # -------------------- RESULTS --------------------
+
+        st.subheader("4. Results")
+
         st.write(
-            f"**Job skills identified:** "
-            f"{', '.join(sorted(job_skills)) if job_skills else 'None'}"
+            "**Job skills identified:** "
+            + (
+                ", ".join(sorted(job_skills))
+                if job_skills
+                else "None from the app's skill list"
+            )
         )
 
         if not job_skills:
             st.info(
-                "No skills from the app's skill list were identified in "
-                "the job description. The match score therefore uses "
-                "semantic similarity only."
+                "No listed skills were identified in the job description. "
+                "These results use semantic similarity only."
             )
 
         if len(results) == 1:
             result = results[0]
-            st.metric("CV match score", f"{result['Match score']:.1f}%")
-            st.write(f"**CV:** {result['CV']}")
+
+            st.metric(
+                "CV match score",
+                f"{result['combined_score'] * 100:.1f}%",
+            )
+            st.write(f"**CV:** {result['cv']}")
+
         else:
-            display_rows = []
-            for rank, result in enumerate(results, start=1):
-                display_rows.append(
+            table_rows = []
+
+            for rank, result in enumerate(
+                results,
+                start=1,
+            ):
+                table_rows.append(
                     {
                         "Rank": rank,
-                        "CV": result["CV"],
-                        "Match score (%)": result["Match score"],
-                        "Semantic score (%)": result["Semantic score"],
-                        "Skill score (%)": result["Skill score"],
+                        "CV": result["cv"],
+                        "Match score (%)": round(
+                            result["combined_score"] * 100,
+                            1,
+                        ),
+                        "Semantic score (%)": round(
+                            result["semantic_score"] * 100,
+                            1,
+                        ),
+                        "Skill score (%)": (
+                            round(
+                                result["skill_score"] * 100,
+                                1,
+                            )
+                            if result["skill_score"] is not None
+                            else None
+                        ),
                     }
                 )
+
             st.dataframe(
-                pd.DataFrame(display_rows),
+                pd.DataFrame(table_rows),
                 use_container_width=True,
                 hide_index=True,
             )
 
         for result in results:
             with st.expander(
-                f"{result['CV']} — {result['Match score']:.1f}% match",
+                f"{result['cv']} — "
+                f"{result['combined_score'] * 100:.1f}% match",
                 expanded=len(results) == 1,
             ):
-                col1, col2 = st.columns(2)
+                left, right = st.columns(2)
 
-                with col1:
+                with left:
                     st.write("**Matched job skills**")
                     st.write(
-                        ", ".join(result["Matched skills"])
+                        ", ".join(result["matched_skills"])
                         or "None identified"
                     )
 
-                with col2:
-                    st.write("**Job skills not identified in this CV**")
+                with right:
                     st.write(
-                        ", ".join(result["Missing skills"])
+                        "**Job skills not identified in this CV**"
+                    )
+                    st.write(
+                        ", ".join(result["missing_skills"])
                         or "None identified"
                     )
 
                 st.write(
-                    f"**Semantic similarity:** "
-                    f"{result['Semantic score']:.1f}%"
+                    "**Sentence-BERT semantic score:** "
+                    f"{result['semantic_score'] * 100:.1f}%"
                 )
-                if result["Skill score"] is not None:
+
+                if result["skill_score"] is not None:
                     st.write(
-                        f"**Skill overlap:** "
-                        f"{result['Skill score']:.1f}%"
+                        "**Skill overlap score:** "
+                        f"{result['skill_score'] * 100:.1f}%"
                     )
 
         export_rows = []
-        for rank, result in enumerate(results, start=1):
+
+        for rank, result in enumerate(
+            results,
+            start=1,
+        ):
             export_rows.append(
                 {
                     "rank": rank,
-                    "cv": result["CV"],
-                    "match_score_percent": result["Match score"],
-                    "semantic_score_percent": result["Semantic score"],
-                    "skill_score_percent": result["Skill score"],
-                    "matched_skills": "; ".join(result["Matched skills"]),
-                    "missing_skills": "; ".join(result["Missing skills"]),
+                    "cv": result["cv"],
+                    "semantic_weight_percent": (
+                        semantic_weight_percent
+                    ),
+                    "skill_weight_percent": (
+                        skill_weight_percent
+                    ),
+                    "match_score_percent": round(
+                        result["combined_score"] * 100,
+                        2,
+                    ),
+                    "semantic_score_percent": round(
+                        result["semantic_score"] * 100,
+                        2,
+                    ),
+                    "skill_score_percent": (
+                        round(
+                            result["skill_score"] * 100,
+                            2,
+                        )
+                        if result["skill_score"] is not None
+                        else None
+                    ),
+                    "matched_skills": "; ".join(
+                        result["matched_skills"]
+                    ),
+                    "missing_skills": "; ".join(
+                        result["missing_skills"]
+                    ),
                 }
             )
 
+        csv_data = pd.DataFrame(
+            export_rows
+        ).to_csv(index=False)
+
         st.download_button(
-            "Download results as CSV",
-            data=pd.DataFrame(export_rows).to_csv(index=False),
+            label="Download results as CSV",
+            data=csv_data,
             file_name="candidate_matching_results.csv",
             mime="text/csv",
         )
 
         st.info(
-            "The match score combines semantic similarity (60%) and "
-            "recognized skill overlap (40%). It is a research score, "
-            "not a probability that someone is qualified. A missing "
-            "skill means the app did not find its listed terms in the CV; "
-            "it does not prove the candidate lacks that skill."
+            f"Selected weights: {semantic_weight_percent}% "
+            f"Sentence-BERT and {skill_weight_percent}% skill matching. "
+            "If no listed job skills are found, the score uses semantic "
+            "similarity alone. Scores are research indicators, not "
+            "probabilities of candidate suitability. A skill being "
+            "'not identified' does not prove that a candidate lacks it."
         )
 
     except Exception as exc:
-        st.error(f"Could not process the uploads: {exc}")
+        st.error(
+            f"Could not process the uploaded files: {exc}"
+        )
