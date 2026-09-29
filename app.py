@@ -1,14 +1,11 @@
-from pathlib import Path
 from io import BytesIO
-import json
+from pathlib import Path
 import re
 
-import numpy as np
 import pandas as pd
 import streamlit as st
 from docx import Document
 from pypdf import PdfReader
-from rank_bm25 import BM25Okapi
 from sentence_transformers import SentenceTransformer
 
 
@@ -17,376 +14,308 @@ st.set_page_config(
     layout="wide",
 )
 
-ROOT = Path(__file__).resolve().parent
-ONTOLOGY_PATH = ROOT / "skill_ontology.json"
+st.title("Explainable Candidate–Job Matching")
+st.caption(
+    "Research prototype. Upload a job description and one or more CVs "
+    "to inspect their matches. Do not use these scores as hiring decisions."
+)
+
+# Edit this list to match the skills used in your research dataset.
+SKILLS = {
+    "python": ["python"],
+    "java": ["java"],
+    "javascript": ["javascript", "java script"],
+    "typescript": ["typescript"],
+    "sql": ["sql"],
+    "excel": ["excel", "microsoft excel"],
+    "power bi": ["power bi", "powerbi"],
+    "tableau": ["tableau"],
+    "machine learning": ["machine learning", "ml"],
+    "deep learning": ["deep learning"],
+    "data analysis": ["data analysis", "data analytics"],
+    "data visualization": ["data visualization", "data visualisation"],
+    "statistics": ["statistics", "statistical analysis"],
+    "pandas": ["pandas"],
+    "numpy": ["numpy"],
+    "scikit-learn": ["scikit-learn", "sklearn"],
+    "tensorflow": ["tensorflow"],
+    "pytorch": ["pytorch"],
+    "aws": ["aws", "amazon web services"],
+    "azure": ["azure", "microsoft azure"],
+    "docker": ["docker"],
+    "kubernetes": ["kubernetes"],
+    "git": ["git", "github"],
+    "linux": ["linux"],
+    "react": ["react", "reactjs", "react.js"],
+    "node.js": ["node.js", "nodejs"],
+    "html": ["html"],
+    "css": ["css"],
+    "rest api": ["rest api", "restful api", "rest apis"],
+    "cybersecurity": ["cybersecurity", "cyber security"],
+    "network security": ["network security"],
+    "penetration testing": ["penetration testing", "pentesting"],
+    "risk assessment": ["risk assessment"],
+    "project management": ["project management"],
+    "agile": ["agile"],
+    "scrum": ["scrum"],
+    "stakeholder management": ["stakeholder management"],
+    "communication": ["communication skills", "written communication"],
+    "digital marketing": ["digital marketing"],
+    "seo": ["seo", "search engine optimization", "search engine optimisation"],
+    "google analytics": ["google analytics"],
+    "social media": ["social media"],
+    "content marketing": ["content marketing"],
+}
 
 
-@st.cache_resource
-def load_model():
-    return SentenceTransformer("all-MiniLM-L6-v2")
-
-
-@st.cache_data
-def load_ontology():
-    with ONTOLOGY_PATH.open("r", encoding="utf-8") as handle:
-        ontology = json.load(handle)
-
-    if not isinstance(ontology, dict) or not ontology:
-        raise ValueError("skill_ontology.json must contain a skill dictionary.")
-
-    return ontology
-
-
-def read_document(uploaded_file):
-    """Extract machine-readable text from TXT, PDF or DOCX."""
+def read_file(uploaded_file):
+    """Extract text from a TXT, PDF, or DOCX upload."""
+    name = uploaded_file.name.lower()
     content = uploaded_file.getvalue()
-    extension = Path(uploaded_file.name).suffix.lower()
 
-    if extension == ".txt":
+    if name.endswith(".txt"):
         return content.decode("utf-8", errors="replace")
 
-    if extension == ".pdf":
+    if name.endswith(".pdf"):
         reader = PdfReader(BytesIO(content))
         return "\n".join(page.extract_text() or "" for page in reader.pages)
 
-    if extension == ".docx":
+    if name.endswith(".docx"):
         document = Document(BytesIO(content))
-        paragraphs = [paragraph.text for paragraph in document.paragraphs]
-        for table in document.tables:
-            for row in table.rows:
-                paragraphs.append(" ".join(cell.text for cell in row.cells))
-        return "\n".join(paragraphs)
+        return "\n".join(p.text for p in document.paragraphs)
 
-    raise ValueError(f"Unsupported file type: {extension}")
+    raise ValueError("Please upload a TXT, PDF, or DOCX file.")
 
 
 def clean_text(text):
-    text = text.replace("\u00ad", "")
-    text = re.sub(r"-\s*\n\s*(?=\w)", "", text)
     return re.sub(r"\s+", " ", text).strip()
 
 
-def remove_direct_identifiers(text):
-    """Basic minimisation; this does not guarantee anonymisation."""
-    text = re.sub(
-        r"\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b",
-        "[email removed]",
-        text,
-        flags=re.IGNORECASE,
-    )
-    text = re.sub(
-        r"(?<!\w)(?:\+?\d[\d\s().-]{8,}\d)(?!\w)",
-        "[phone removed]",
-        text,
-    )
-    return text
+def contains_phrase(text, phrase):
+    """Match a skill as a complete phrase, ignoring case."""
+    pattern = r"(?<!\w)" + re.escape(phrase) + r"(?!\w)"
+    return re.search(pattern, text, flags=re.IGNORECASE) is not None
 
 
-def alias_pattern(alias):
-    """Match complete terms while allowing flexible spaces."""
-    parts = re.split(r"\s+", alias.strip())
-    body = r"\s+".join(re.escape(part) for part in parts)
-    return re.compile(
-        rf"(?<![A-Za-z0-9]){body}(?![A-Za-z0-9])",
-        flags=re.IGNORECASE,
-    )
-
-
-def is_negated(text, match_start):
-    preceding = text[max(0, match_start - 80):match_start].lower()
-    preceding = re.split(r"[.;\n]", preceding)[-1]
-    return bool(
-        re.search(
-            r"(?:no experience (?:with|in|of)|"
-            r"no knowledge (?:of|in)|"
-            r"not experienced (?:with|in)|"
-            r"without experience (?:with|in)|"
-            r"lack(?:s|ing)? experience (?:with|in)|"
-            r"unfamiliar with)\s*$",
-            preceding,
-        )
-    )
-
-
-def extract_skills(text, ontology):
+def extract_skills(text):
     found = set()
-    evidence = {}
-
-    for canonical, aliases in ontology.items():
-        terms = {str(canonical), *map(str, aliases)}
-
-        for term in sorted(terms, key=len, reverse=True):
-            for match in alias_pattern(term).finditer(text):
-                if is_negated(text, match.start()):
-                    continue
-
-                found.add(canonical)
-                evidence.setdefault(canonical, []).append(
-                    text[max(0, match.start() - 45):
-                         min(len(text), match.end() + 65)].strip()
-                )
-
-            if canonical in found:
-                break
-
-    return found, evidence
+    for skill, aliases in SKILLS.items():
+        if any(contains_phrase(text, alias) for alias in aliases):
+            found.add(skill)
+    return found
 
 
-def job_skill_sections(text):
-    """Identify required and preferred sections when the headings are present."""
-    required_heading = re.search(
-        r"\b(required|essential|must[- ]have|minimum)\b"
-        r"(?:\s+(?:skills|requirements|qualifications))?\s*:",
-        text,
-        flags=re.IGNORECASE,
-    )
-    preferred_heading = re.search(
-        r"\b(preferred|desirable|nice[- ]to[- ]have)\b"
-        r"(?:\s+(?:skills|requirements|qualifications))?\s*:",
-        text,
-        flags=re.IGNORECASE,
-    )
-
-    if required_heading and preferred_heading:
-        if required_heading.start() < preferred_heading.start():
-            required_text = text[
-                required_heading.end():preferred_heading.start()
-            ]
-            preferred_text = text[preferred_heading.end():]
-        else:
-            preferred_text = text[
-                preferred_heading.end():required_heading.start()
-            ]
-            required_text = text[required_heading.end():]
-        return required_text, preferred_text
-
-    # If headings are absent, all identified skills are treated as required.
-    return text, ""
+@st.cache_resource(show_spinner="Loading Sentence-BERT model...")
+def load_model():
+    return SentenceTransformer("sentence-transformers/all-MiniLM-L6-v2")
 
 
-def tokenize(text):
-    return re.findall(r"[a-z0-9]+", text.lower())
+st.subheader("1. Job description")
 
-
-st.title("Explainable Candidate–Job Matching")
-st.write(
-    "Upload one job description and at least two CVs. The prototype "
-    "calculates Sentence-BERT similarity, structured skill coverage, "
-    "BM25 scores and a 60:40 hybrid ranking."
-)
-st.caption(
-    "Research prototype only. Review the original CVs and job criteria "
-    "before making any decision."
-)
-
-if not ONTOLOGY_PATH.exists():
-    st.error(
-        "Upload skill_ontology.json to the same GitHub folder as app.py."
-    )
-    st.stop()
-
-try:
-    ontology = load_ontology()
-except Exception as exc:
-    st.error(f"Could not load the skill dictionary: {exc}")
-    st.stop()
-
-job_file = st.file_uploader(
-    "Upload job description",
+jd_file = st.file_uploader(
+    "Upload the job description",
     type=["txt", "pdf", "docx"],
+    key="job_description",
 )
+jd_typed = st.text_area(
+    "Or paste the job description here",
+    height=180,
+    placeholder="Paste the job title, responsibilities, and required skills...",
+)
+
+st.subheader("2. Candidate CVs")
+
 cv_files = st.file_uploader(
-    "Upload two or more CVs",
+    "Upload one CV, or several CVs to compare",
     type=["txt", "pdf", "docx"],
     accept_multiple_files=True,
+    key="candidate_cvs",
 )
 
-if st.button("Rank candidates", type="primary"):
-    if job_file is None or len(cv_files) < 2:
-        st.warning("Upload one job description and at least two CVs.")
-        st.stop()
-
+if st.button("Match candidates", type="primary"):
     try:
-        job_text = clean_text(read_document(job_file))
-        cv_texts = [
-            clean_text(remove_direct_identifiers(read_document(file)))
-            for file in cv_files
-        ]
-    except Exception as exc:
-        st.error(f"Could not read a document: {exc}")
-        st.stop()
+        job_text = clean_text(
+            jd_typed if jd_typed.strip() else read_file(jd_file)
+        ) if (jd_typed.strip() or jd_file is not None) else ""
 
-    if len(job_text) < 30:
-        st.error(
-            "The job description contains too little extractable text. "
-            "Scanned PDFs need OCR or a machine-readable copy."
-        )
-        st.stop()
+        if not job_text:
+            st.error("Enter or upload a job description.")
+            st.stop()
 
-    unreadable = [
-        file.name
-        for file, text in zip(cv_files, cv_texts)
-        if len(text) < 30
-    ]
-    if unreadable:
-        st.error(
-            "These CVs contain too little extractable text: "
-            + ", ".join(unreadable)
-        )
-        st.stop()
+        if not cv_files:
+            st.error("Upload at least one CV.")
+            st.stop()
 
-    required_text, preferred_text = job_skill_sections(job_text)
-    required_skills, _ = extract_skills(required_text, ontology)
-    preferred_skills, _ = extract_skills(preferred_text, ontology)
-    preferred_skills -= required_skills
+        candidates = []
+        for cv_file in cv_files:
+            cv_text = clean_text(read_file(cv_file))
+            if not cv_text:
+                st.warning(
+                    f"No readable text was found in {cv_file.name}. "
+                    "Scanned PDFs may need OCR."
+                )
+                continue
 
-    if not required_skills:
-        st.warning(
-            "No skills from the fixed dictionary were identified in the "
-            "job description. The skill component cannot be calculated "
-            "meaningfully for this job."
-        )
-        st.stop()
+            candidates.append(
+                {"filename": cv_file.name, "text": cv_text}
+            )
 
-    with st.spinner("Loading Sentence-BERT and scoring documents..."):
+        if not candidates:
+            st.error("None of the uploaded CVs contained readable text.")
+            st.stop()
+
         model = load_model()
-        embeddings = model.encode(
-            [job_text] + cv_texts,
+        job_embedding = model.encode(
+            job_text,
             normalize_embeddings=True,
-            convert_to_numpy=True,
         )
-        cosine_scores = embeddings[1:] @ embeddings[0]
-        semantic_scores = np.clip(
-            (cosine_scores + 1.0) / 2.0, 0.0, 1.0
-        )
-
-        corpus = [tokenize(text) for text in cv_texts]
-        bm25 = BM25Okapi(corpus)
-        bm25_scores = bm25.get_scores(tokenize(job_text))
-
-    rows = []
-    evidence_by_candidate = {}
-
-    for index, (file, cv_text) in enumerate(zip(cv_files, cv_texts)):
-        candidate_skills, evidence = extract_skills(cv_text, ontology)
-
-        matched_required = sorted(required_skills & candidate_skills)
-        missing_required = sorted(required_skills - candidate_skills)
-        matched_preferred = sorted(preferred_skills & candidate_skills)
-
-        required_coverage = (
-            len(matched_required) / len(required_skills)
-        )
-        preferred_coverage = (
-            len(matched_preferred) / len(preferred_skills)
-            if preferred_skills else 0.0
+        cv_embeddings = model.encode(
+            [candidate["text"] for candidate in candidates],
+            normalize_embeddings=True,
         )
 
-        skill_score = (
-            0.80 * required_coverage
-            + 0.20 * preferred_coverage
+        job_skills = extract_skills(job_text)
+        results = []
+
+        for candidate, cv_embedding in zip(candidates, cv_embeddings):
+            cv_skills = extract_skills(candidate["text"])
+            matched = sorted(job_skills & cv_skills)
+            missing = sorted(job_skills - cv_skills)
+
+            # Normalized embeddings make their dot product cosine similarity.
+            cosine = float(job_embedding @ cv_embedding)
+
+            # Keep the displayed semantic component between 0 and 1.
+            semantic_score = max(0.0, min(1.0, cosine))
+
+            # If the job description contains no recognized skills,
+            # do not invent a skill match.
+            skill_score = (
+                len(matched) / len(job_skills)
+                if job_skills
+                else None
+            )
+
+            if skill_score is None:
+                combined_score = semantic_score
+            else:
+                combined_score = (
+                    0.60 * semantic_score + 0.40 * skill_score
+                )
+
+            results.append(
+                {
+                    "CV": candidate["filename"],
+                    "Match score": round(100 * combined_score, 1),
+                    "Semantic score": round(100 * semantic_score, 1),
+                    "Skill score": (
+                        round(100 * skill_score, 1)
+                        if skill_score is not None
+                        else None
+                    ),
+                    "Matched skills": matched,
+                    "Missing skills": missing,
+                }
+            )
+
+        results.sort(
+            key=lambda item: (-item["Match score"], item["CV"].lower())
         )
-        hybrid_score = (
-            0.60 * float(semantic_scores[index])
-            + 0.40 * skill_score
-        )
 
-        candidate_id = f"CV{index + 1:03d}"
-        evidence_by_candidate[candidate_id] = {
-            "file": file.name,
-            "matched_required": matched_required,
-            "missing_required": missing_required,
-            "matched_preferred": matched_preferred,
-            "evidence": evidence,
-        }
-
-        rows.append({
-            "candidate_id": candidate_id,
-            "cv_file": file.name,
-            "semantic_score": float(semantic_scores[index]),
-            "required_coverage": required_coverage,
-            "preferred_coverage": preferred_coverage,
-            "skill_score": skill_score,
-            "bm25_score": float(bm25_scores[index]),
-            "hybrid_score": hybrid_score,
-        })
-
-    result = pd.DataFrame(rows)
-    result = result.sort_values(
-        ["hybrid_score", "candidate_id"],
-        ascending=[False, True],
-        kind="stable",
-    ).reset_index(drop=True)
-    result.insert(0, "rank", range(1, len(result) + 1))
-
-    st.session_state["result"] = result
-    st.session_state["evidence"] = evidence_by_candidate
-    st.session_state["job_skills"] = {
-        "required": sorted(required_skills),
-        "preferred": sorted(preferred_skills),
-    }
-
-if "result" in st.session_state:
-    result = st.session_state["result"]
-    evidence_by_candidate = st.session_state["evidence"]
-    job_skills = st.session_state["job_skills"]
-
-    st.subheader("New candidate ranking")
-    st.dataframe(
-        result.round(4),
-        use_container_width=True,
-        hide_index=True,
-    )
-
-    st.download_button(
-        "Download ranking CSV",
-        data=result.to_csv(index=False).encode("utf-8"),
-        file_name="candidate_ranking.csv",
-        mime="text/csv",
-    )
-
-    with st.expander("Skills identified in the job description"):
-        st.write("**Required:**", job_skills["required"])
-        st.write("**Preferred:**", job_skills["preferred"])
-
-    selected_id = st.selectbox(
-        "Inspect a candidate",
-        result["candidate_id"].tolist(),
-    )
-    details = evidence_by_candidate[selected_id]
-
-    st.write(f"**File:** {details['file']}")
-    left, right = st.columns(2)
-
-    with left:
+        st.subheader("3. Results")
         st.write(
-            "**Matched required skills:**",
-            details["matched_required"] or "None identified",
-        )
-        st.write(
-            "**Matched preferred skills:**",
-            details["matched_preferred"] or "None identified",
+            f"**Job skills identified:** "
+            f"{', '.join(sorted(job_skills)) if job_skills else 'None'}"
         )
 
-    with right:
-        st.write(
-            "**Missing required skills:**",
-            details["missing_required"] or "None identified",
+        if not job_skills:
+            st.info(
+                "No skills from the app's skill list were identified in "
+                "the job description. The match score therefore uses "
+                "semantic similarity only."
+            )
+
+        if len(results) == 1:
+            result = results[0]
+            st.metric("CV match score", f"{result['Match score']:.1f}%")
+            st.write(f"**CV:** {result['CV']}")
+        else:
+            display_rows = []
+            for rank, result in enumerate(results, start=1):
+                display_rows.append(
+                    {
+                        "Rank": rank,
+                        "CV": result["CV"],
+                        "Match score (%)": result["Match score"],
+                        "Semantic score (%)": result["Semantic score"],
+                        "Skill score (%)": result["Skill score"],
+                    }
+                )
+            st.dataframe(
+                pd.DataFrame(display_rows),
+                use_container_width=True,
+                hide_index=True,
+            )
+
+        for result in results:
+            with st.expander(
+                f"{result['CV']} — {result['Match score']:.1f}% match",
+                expanded=len(results) == 1,
+            ):
+                col1, col2 = st.columns(2)
+
+                with col1:
+                    st.write("**Matched job skills**")
+                    st.write(
+                        ", ".join(result["Matched skills"])
+                        or "None identified"
+                    )
+
+                with col2:
+                    st.write("**Job skills not identified in this CV**")
+                    st.write(
+                        ", ".join(result["Missing skills"])
+                        or "None identified"
+                    )
+
+                st.write(
+                    f"**Semantic similarity:** "
+                    f"{result['Semantic score']:.1f}%"
+                )
+                if result["Skill score"] is not None:
+                    st.write(
+                        f"**Skill overlap:** "
+                        f"{result['Skill score']:.1f}%"
+                    )
+
+        export_rows = []
+        for rank, result in enumerate(results, start=1):
+            export_rows.append(
+                {
+                    "rank": rank,
+                    "cv": result["CV"],
+                    "match_score_percent": result["Match score"],
+                    "semantic_score_percent": result["Semantic score"],
+                    "skill_score_percent": result["Skill score"],
+                    "matched_skills": "; ".join(result["Matched skills"]),
+                    "missing_skills": "; ".join(result["Missing skills"]),
+                }
+            )
+
+        st.download_button(
+            "Download results as CSV",
+            data=pd.DataFrame(export_rows).to_csv(index=False),
+            file_name="candidate_matching_results.csv",
+            mime="text/csv",
         )
 
-    with st.expander("Text evidence for matched skills"):
-        for skill in (
-            details["matched_required"]
-            + details["matched_preferred"]
-        ):
-            st.write(f"**{skill}**")
-            for snippet in details["evidence"].get(skill, [])[:2]:
-                st.write(f"• {snippet}")
+        st.info(
+            "The match score combines semantic similarity (60%) and "
+            "recognized skill overlap (40%). It is a research score, "
+            "not a probability that someone is qualified. A missing "
+            "skill means the app did not find its listed terms in the CV; "
+            "it does not prove the candidate lacks that skill."
+        )
 
-    st.info(
-        "Scores are matching aids, not suitability decisions. "
-        "The skill dictionary can miss synonyms or context, and "
-        "Sentence-BERT similarity does not prove competence. "
-        "The BM25 score is displayed separately and is not part "
-        "of the hybrid score."
-    )
+    except Exception as exc:
+        st.error(f"Could not process the uploads: {exc}")
