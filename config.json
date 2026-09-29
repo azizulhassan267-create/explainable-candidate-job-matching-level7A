@@ -1,0 +1,17 @@
+{
+    "project_version": "2.0",
+    "random_seed": 42,
+    "sbert_model": "all-MiniLM-L6-v2",
+    "semantic_weight": 0.6,
+    "skill_weight": 0.4,
+    "top_k": [
+        5,
+        10
+    ],
+    "minimum_jobs": 5,
+    "target_cv_count": 100,
+    "skill_scoring": {
+        "required_skill_weight": 0.8,
+        "preferred_skill_weight": 0.2
+    }
+}
