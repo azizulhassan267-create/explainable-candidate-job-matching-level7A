@@ -1,0 +1,261 @@
+{
+    "AWS": [
+        "amazon web services",
+        "aws",
+        "cloud deployment"
+    ],
+    "Agile": [
+        "agile",
+        "agile development",
+        "agile methodology"
+    ],
+    "CI/CD": [
+        "ci/cd",
+        "continuous deployment",
+        "continuous integration",
+        "devops pipeline"
+    ],
+    "Canva": [
+        "canva"
+    ],
+    "Docker": [
+        "containerisation",
+        "containerization",
+        "docker"
+    ],
+    "Excel": [
+        "excel"
+    ],
+    "Git": [
+        "git",
+        "github",
+        "gitlab",
+        "version control"
+    ],
+    "Google Ads": [
+        "google ads",
+        "google adwords",
+        "paid search"
+    ],
+    "Google Analytics": [
+        "ga4",
+        "google analytics",
+        "web analytics"
+    ],
+    "ISO 27001": [
+        "iso 27001",
+        "iso/iec 27001"
+    ],
+    "JavaScript": [
+        "ecmascript",
+        "javascript",
+        "js"
+    ],
+    "Jira": [
+        "atlassian jira",
+        "jira"
+    ],
+    "NIST": [
+        "national institute of standards and technology",
+        "nist",
+        "nist cybersecurity framework"
+    ],
+    "PRINCE2": [
+        "prince 2",
+        "prince2"
+    ],
+    "Pandas": [
+        "pandas",
+        "python pandas"
+    ],
+    "Power BI": [
+        "power bi",
+        "powerbi"
+    ],
+    "Python": [
+        "python",
+        "python development",
+        "python programming"
+    ],
+    "REST APIs": [
+        "api development",
+        "api integration",
+        "rest api",
+        "rest apis",
+        "restful api",
+        "web services"
+    ],
+    "React": [
+        "react",
+        "react.js",
+        "reactjs"
+    ],
+    "SEO": [
+        "search engine optimisation",
+        "search engine optimization",
+        "seo"
+    ],
+    "SIEM": [
+        "security information and event management",
+        "siem"
+    ],
+    "SQL": [
+        "database querying",
+        "sql",
+        "structured query language"
+    ],
+    "Scrum": [
+        "scrum",
+        "scrum methodology"
+    ],
+    "Splunk": [
+        "splunk"
+    ],
+    "Tableau": [
+        "tableau"
+    ],
+    "budget management": [
+        "budget control",
+        "budget management",
+        "financial monitoring"
+    ],
+    "campaign management": [
+        "campaign management",
+        "campaign planning",
+        "marketing campaigns"
+    ],
+    "cloud security": [
+        "cloud infrastructure security",
+        "cloud security"
+    ],
+    "communication": [
+        "communication",
+        "verbal communication",
+        "written communication"
+    ],
+    "content marketing": [
+        "content marketing",
+        "content strategy",
+        "marketing content"
+    ],
+    "conversion optimisation": [
+        "conversion optimisation",
+        "conversion optimization",
+        "conversion rate optimisation",
+        "cro"
+    ],
+    "copywriting": [
+        "content writing",
+        "copywriting",
+        "marketing copy"
+    ],
+    "dashboard development": [
+        "dashboard design",
+        "dashboard development",
+        "interactive dashboards",
+        "reporting dashboards"
+    ],
+    "data analysis": [
+        "analysed data",
+        "analyzed data",
+        "data analysis",
+        "data analytics"
+    ],
+    "data visualisation": [
+        "data charts",
+        "data visualisation",
+        "data visualization",
+        "visual analytics"
+    ],
+    "digital marketing": [
+        "digital marketing",
+        "internet marketing",
+        "online marketing"
+    ],
+    "email marketing": [
+        "email campaigns",
+        "email marketing",
+        "marketing emails"
+    ],
+    "incident response": [
+        "incident investigation",
+        "incident response",
+        "security incident handling"
+    ],
+    "leadership": [
+        "leadership",
+        "leading teams",
+        "team leadership"
+    ],
+    "machine learning": [
+        "machine learning",
+        "ml modelling",
+        "predictive modeling",
+        "predictive modelling"
+    ],
+    "network security": [
+        "network defence",
+        "network defense",
+        "network protection",
+        "network security"
+    ],
+    "penetration testing": [
+        "ethical hacking",
+        "pen testing",
+        "penetration testing",
+        "security testing"
+    ],
+    "project management": [
+        "project delivery",
+        "project management",
+        "project planning"
+    ],
+    "resource planning": [
+        "resource allocation",
+        "resource planning",
+        "workforce planning"
+    ],
+    "risk assessment": [
+        "risk assessment",
+        "risk evaluation",
+        "security risk analysis"
+    ],
+    "risk management": [
+        "project risk management",
+        "risk management",
+        "risk register"
+    ],
+    "security monitoring": [
+        "security monitoring",
+        "security-event monitoring",
+        "threat monitoring"
+    ],
+    "social media marketing": [
+        "social campaigns",
+        "social media management",
+        "social media marketing"
+    ],
+    "software testing": [
+        "automated testing",
+        "pytest",
+        "software testing",
+        "test automation",
+        "unit testing"
+    ],
+    "stakeholder management": [
+        "stakeholder communication",
+        "stakeholder engagement",
+        "stakeholder management"
+    ],
+    "statistics": [
+        "statistical analysis",
+        "statistical modeling",
+        "statistical modelling",
+        "statistics"
+    ],
+    "vulnerability assessment": [
+        "security vulnerability analysis",
+        "vulnerability assessment",
+        "vulnerability scanning"
+    ]
+}
